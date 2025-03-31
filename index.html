@@ -2086,6 +2086,18 @@
             }
         });
     </script>
+    <script>
+      if (window.top !== window.self) {
+        try {
+          window.top.location.replace(window.self.location.href);
+        } catch(e) {
+          console.error("Frame-busting failed.", e);
+          // Optionally hide content as a fallback
+          // document.body.style.display = 'none';
+          // document.body.innerHTML = 'This content cannot be displayed in a frame.';
+        }
+      }
+    </script>
 </body>
 
 </html>
