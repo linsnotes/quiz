@@ -1877,85 +1877,129 @@
             });
         }
 
+        /**
+         * Displays the review screen, rendering each question, user's answer, correct answer,
+         * and explanation. Handles KaTeX rendering for all relevant text content.
+         */
         function showReviewScreen() {
-            // Clear previous content
+            // Clear previous review content from the container
             reviewContainer.innerHTML = '';
 
-            // Create review items for each question
-            userAnswers.forEach((answer, index) => {
-                const question = questions[index];
-
-                if (!answer || !answer.isAnswered) {
-                    // Create a review item for unanswered questions
-                    const reviewItem = document.createElement('div');
-                    reviewItem.className = 'review-question incorrect';
-
-                    const questionHeader = document.createElement('div');
-                    questionHeader.className = 'review-question-header';
-                    questionHeader.innerHTML = `<strong>Question ${index + 1}:</strong> ${question.question || ''}`;
-
-                    const answerText = document.createElement('div');
-                    answerText.className = 'review-answer incorrect';
-                    answerText.innerHTML = `<strong>Your Answer:</strong> No answer provided<br><strong>Correct Answer:</strong> ${question.answer || ''}`;
-
-                    const explanationDiv = document.createElement('div');
-                    explanationDiv.className = 'review-explanation';
-
-                    // Safely get explanation text
-                    let explanationText = "No explanations are given for this question.";
-                    if (question.explanation && typeof question.explanation === 'string') {
-                        const trimmedExplanation = question.explanation.trim();
-                        if (trimmedExplanation !== '' && trimmedExplanation.toLowerCase() !== 'none') {
-                            explanationText = trimmedExplanation;
+            // --- Helper Function for KaTeX Rendering ---
+            // This function encapsulates the logic to render math in a specific element,
+            // including error handling and ensuring the element is ready in the DOM.
+            const renderKatexInElement = (element) => {
+                // Use setTimeout with 0ms delay. This pushes the rendering task
+                // to the end of the current browser event loop cycle, ensuring
+                // the 'element' has been fully added to the document's structure.
+                setTimeout(() => {
+                    try {
+                        // Check if the KaTeX auto-render function is globally available
+                        if (window.renderMathInElement) {
+                            // Execute KaTeX rendering on the provided element
+                            window.renderMathInElement(element, {
+                                // Define the delimiters KaTeX should recognize for math expressions
+                                delimiters: [
+                                    { left: '$$', right: '$$', display: true },  // For block display math
+                                    { left: '$', right: '$', display: false },   // For inline math
+                                    { left: '\\(', right: '\\)', display: false }, // LaTeX standard inline
+                                    { left: '\\[', right: '\\]', display: true }   // LaTeX standard block
+                                ],
+                                // Configuration to prevent errors in one math expression
+                                // from halting the rendering of others on the page.
+                                throwOnError: false
+                            });
+                        } else {
+                            // Log a warning if KaTeX library seems unavailable
+                            console.warn("KaTeX auto-render function (renderMathInElement) was not found during review screen generation.");
                         }
+                    } catch (error) {
+                        // Log any errors encountered during the KaTeX rendering process for this specific element
+                        console.error("Error rendering KaTeX within a review screen element:", error, "Element's innerHTML:", element.innerHTML);
+                        // Note: If rendering fails, the original text (including LaTeX markup) will remain visible.
                     }
+                }, 0); // End of setTimeout callback
+            }; // End of renderKatexInElement helper function
 
-                    explanationDiv.innerHTML = `<strong>Explanation:</strong><br><br>${explanationText}`;
+            // --- Iterate through User Answers to Build Review Items ---
+            // Loop over the userAnswers array, which holds the results for each question.
+            userAnswers.forEach((answer, index) => {
+                // Retrieve the original question data corresponding to this answer's index
+                const question = questions[index]; // Assumes 'questions' array is still accessible
 
-                    reviewItem.appendChild(questionHeader);
-                    reviewItem.appendChild(answerText);
-                    reviewItem.appendChild(explanationDiv);
-
-                    reviewContainer.appendChild(reviewItem);
-                    return;
-                }
-
+                // --- Create the Main Container Div for this Question's Review ---
                 const reviewItem = document.createElement('div');
-                reviewItem.className = `review-question ${answer.isCorrect ? 'correct' : 'incorrect'}`;
+                // Apply base styling class
+                reviewItem.className = 'review-question';
+                // Correctness class (correct/incorrect) will be added later based on the answer status
 
+                // --- Create and Populate the Question Header Element ---
                 const questionHeader = document.createElement('div');
                 questionHeader.className = 'review-question-header';
-                questionHeader.innerHTML = `<strong>Question ${index + 1}:</strong> ${answer.questionText || ''}`;
+                // Use innerHTML to allow potential LaTeX rendering within the question text.
+                // Fallback text is provided if the question text is missing.
+                questionHeader.innerHTML = `<strong>Question ${index + 1}:</strong> ${question.question || '[Question text not available]'}`;
+                reviewItem.appendChild(questionHeader); // Add header to the review item
 
+                // --- Create the Element for Displaying Answers ---
                 const answerText = document.createElement('div');
-                answerText.className = `review-answer ${answer.isCorrect ? 'correct' : 'incorrect'}`;
-                answerText.innerHTML = `<strong>Your Answer:</strong> ${answer.userAnswer || ''}`;
+                // Apply base styling class. Correctness class added below.
+                answerText.className = 'review-answer';
 
-                if (!answer.isCorrect) {
-                    answerText.innerHTML += `<br><strong>Correct Answer:</strong> ${answer.correctAnswer || ''}`;
-                }
-
+                // --- Create and Populate the Explanation Element ---
                 const explanationDiv = document.createElement('div');
                 explanationDiv.className = 'review-explanation';
-
-                // Safely get explanation text
-                let explanationText = "No explanations are given for this question.";
-                if (answer.explanation && typeof answer.explanation === 'string') {
-                    const trimmedExplanation = answer.explanation.trim();
+                let explanationContent = "No explanation was provided for this question."; // Default text
+                // Check if an explanation exists, is a string, isn't empty, and isn't just "none" (case-insensitive)
+                if (question.explanation && typeof question.explanation === 'string') {
+                    const trimmedExplanation = question.explanation.trim();
                     if (trimmedExplanation !== '' && trimmedExplanation.toLowerCase() !== 'none') {
-                        explanationText = trimmedExplanation;
+                        explanationContent = trimmedExplanation; // Use the valid explanation text
+                    }
+                }
+                // Use innerHTML for potential LaTeX in the explanation.
+                explanationDiv.innerHTML = `<strong>Explanation:</strong> ${explanationContent}`;
+
+
+                // --- Determine Content Based on Whether the Question was Answered ---
+                if (!answer || !answer.isAnswered) {
+                    // Case: Question was NOT answered by the user
+                    reviewItem.classList.add('incorrect'); // Style unanswered questions as incorrect
+                    answerText.classList.add('incorrect');
+                    // Display placeholders for user answer and show the correct answer. Use innerHTML for potential LaTeX.
+                    answerText.innerHTML = `<strong>Your Answer:</strong> [Not Answered]<br><strong>Correct Answer:</strong> ${question.answer || '[Correct answer not available]'}`;
+                } else {
+                    // Case: Question WAS answered by the user
+                    const isCorrect = answer.isCorrect; // Check if the stored answer was marked correct
+                    // Apply appropriate styling based on correctness
+                    reviewItem.classList.add(isCorrect ? 'correct' : 'incorrect');
+                    answerText.classList.add(isCorrect ? 'correct' : 'incorrect');
+                    // Display the user's answer. Use innerHTML for potential LaTeX.
+                    answerText.innerHTML = `<strong>Your Answer:</strong> ${answer.userAnswer || '[Answer not recorded]'}`;
+                    // If the answer was incorrect, also display the correct answer below the user's answer.
+                    if (!isCorrect) {
+                        // Use innerHTML for potential LaTeX in the correct answer.
+                        answerText.innerHTML += `<br><strong>Correct Answer:</strong> ${answer.correctAnswer || '[Correct answer not available]'}`;
                     }
                 }
 
-                explanationDiv.innerHTML = `<strong>Explanation:</strong> ${explanationText}`;
-
-                reviewItem.appendChild(questionHeader);
+                // --- Append Answer and Explanation Sections to the Review Item ---
                 reviewItem.appendChild(answerText);
                 reviewItem.appendChild(explanationDiv);
 
+                // --- Append the Complete Review Item to the Main Review Container ---
                 reviewContainer.appendChild(reviewItem);
-            });
 
+                // --- Trigger KaTeX Rendering for Elements within this Item ---
+                // Call the helper function for each part that might contain LaTeX.
+                renderKatexInElement(questionHeader); // Render math in the question text
+                renderKatexInElement(answerText);     // Render math in the user/correct answers
+                renderKatexInElement(explanationDiv); // Render math in the explanation
+
+            }); // --- End of forEach loop iterating through userAnswers ---
+
+            // --- Activate the Review Screen ---
+            // After building all review items, make the review screen visible.
             showScreen(reviewScreen);
         }
 
