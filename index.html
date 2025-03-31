@@ -9,6 +9,13 @@
     <meta http-equiv="Expires" content="0">
     <title>Quiz Lah!</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <!-- KaTeX CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" integrity="sha384-n8MVd4RsNIU0tAv4ct0nTaAbDJwPJzDEaqSD1tBCETZNMQi7mMx1LjwUPFTBESwu" crossorigin="anonymous">
+    <!-- KaTeX JS  -->
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js" integrity="sha384-XjKyOOlGwcjNTAIQHIpgOno0Hl1YQqzUOEleOLALmuqehneUG+vnGctmImABCqZr" crossorigin="anonymous"></script>
+    <!-- KaTeX auto-render extension JS -->
+    <!-- This makes it easier as it can automatically find and render math -->
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js" integrity="sha384-+VBxd3r6XgURycqtZ117nYw44OOcIax56Z4dCRWbxyPt0Koah1uHoK0o4+/RRE05" crossorigin="anonymous"></script>
     <style>
         :root {
             --primary-color: #0071e3;
@@ -1513,16 +1520,59 @@
             hintVisible = false;
             showHintBtn.textContent = 'Show Hint';
 
-            // Set question text
-            questionText.textContent = question.question || '';
+            // 1. Set question text using innerHTML (needed for KaTeX)
+            // Ensure question.question is treated as a string
+            const questionContent = String(question.question || '');
+            questionText.innerHTML = questionContent; // Use innerHTML
 
+            // 2. Tell KaTeX to render math within the questionText element
+            // This uses the auto-render extension, which is simpler.
+            // Make sure the DOM is updated before calling renderMathInElement.
+            // Using setTimeout with 0ms delay often works to ensure this.
+            setTimeout(() => {
+                try {
+                    if (window.renderMathInElement) {
+                         window.renderMathInElement(questionText, {
+                             // Optional: Configure delimiters if needed
+                             delimiters: [
+                                 {left: '$$', right: '$$', display: true},
+                                 {left: '$', right: '$', display: false},
+                                 {left: '\\(', right: '\\)', display: false},
+                                 {left: '\\[', right: '\\]', display: true}
+                             ],
+                             // Optional: Configure error handling
+                             throwOnError : false // Don't stop rendering on errors
+                         });
+                    } else {
+                        console.warn("KaTeX auto-render extension not loaded.");
+                    }
+                } catch (error) {
+                    console.error("Error rendering math with KaTeX:", error);
+                     // Optionally display the raw text if rendering fails badly
+                    questionText.innerHTML = questionContent; // Revert if needed
+                }
+            }, 0); // Delay ensures element is in DOM
+
+
+
+            
+
+
+            
             // Set reading material if available
             const rm = String(question.readingMaterial || "").trim().toLowerCase();
             if (!["", "none", "na"].includes(rm)) {
-                readingMaterial.textContent = question.readingMaterial;
+                readingMaterial.innerHTML = String(question.readingMaterial || ''); // Use innerHTML if math needed
                 readingMaterial.style.display = 'block';
+                // Also render math in reading material if needed
+                setTimeout(() => {
+                    if (window.renderMathInElement) {
+                         window.renderMathInElement(readingMaterial, { /* options */ });
+                    }
+                }, 0);
             } else {
                 readingMaterial.style.display = 'none';
+                readingMaterial.innerHTML = ''; // Clear innerHTML
             }
 
             // Set hint text
