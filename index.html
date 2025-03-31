@@ -1598,47 +1598,101 @@
             }
         }
 
+
+        /**
+         * Renders an MCQ question, including shuffling options and handling KaTeX rendering.
+         * @param {object} question - The question object containing details like shuffledOptions.
+         */
         function renderMCQQuestion(question) {
+            // Clear any previous options displayed
             mcqOptions.innerHTML = '';
 
-            // Use the preprocessed shuffled options
+            // Ensure we have pre-shuffled options; fallback to empty array if not
             const optionsToRender = question.shuffledOptions || [];
 
-            // Render options
+            // Iterate through the shuffled options to create display elements
             optionsToRender.forEach((optionObj) => {
+                // Create the main container div for the option
                 const optionElement = document.createElement('div');
                 optionElement.className = 'mcq-option';
+                // Store the original raw option text (might include LaTeX) in a data attribute
                 optionElement.dataset.option = optionObj.option;
+                // Store the assigned letter (A, B, C...)
                 optionElement.dataset.letter = optionObj.letter;
 
+                // Create the element for the option letter (e.g., 'A')
                 const letterElement = document.createElement('div');
                 letterElement.className = 'mcq-option-letter';
-                letterElement.textContent = optionObj.letter;
+                letterElement.textContent = optionObj.letter; // Display the letter
 
+                // Create the element for the option's text content
                 const textElement = document.createElement('div');
                 textElement.className = 'mcq-option-text';
-                textElement.textContent = optionObj.option;
 
+                // --- KEY CHANGE: Use innerHTML ---
+                // Set the content using innerHTML so that HTML tags and LaTeX delimiters are parsed
+                textElement.innerHTML = optionObj.option;
+
+                // Append the letter and text elements to the main option container
                 optionElement.appendChild(letterElement);
                 optionElement.appendChild(textElement);
 
-                // Check if this option was previously selected
+                // --- Check Selection State ---
+                // If this option matches the previously saved user answer for the current question, mark it as selected
                 if (userAnswers[currentQuestion] &&
+                    userAnswers[currentQuestion].isAnswered && // Only check if an answer was actually saved
                     userAnswers[currentQuestion].userAnswer &&
                     userAnswers[currentQuestion].userAnswer.toLowerCase().trim() === optionObj.option.toLowerCase().trim()) {
                     optionElement.classList.add('selected');
                 }
 
+                // --- Add Click Listener ---
+                // Add an event listener to handle when the user clicks on this option
                 optionElement.addEventListener('click', () => {
-                    document.querySelectorAll('.mcq-option').forEach(el => el.classList.remove('selected'));
+                    // Remove the 'selected' class from all options first
+                    document.querySelectorAll('#mcqOptions .mcq-option').forEach(el => el.classList.remove('selected'));
+                    // Add the 'selected' class to the clicked option
                     optionElement.classList.add('selected');
-
-                    // Save this answer
+                    // Save the user's answer (using the original option text, which might contain LaTeX)
                     saveUserAnswer(optionObj.option);
                 });
 
+                // Append the fully constructed option element to the main options container
                 mcqOptions.appendChild(optionElement);
-            });
+
+                // --- KEY CHANGE: Trigger KaTeX Rendering ---
+                // Use setTimeout with 0ms delay to ensure the element is in the DOM
+                // before attempting to render math inside it.
+                setTimeout(() => {
+                    try {
+                        // Check if the KaTeX auto-render function is available
+                        if (window.renderMathInElement) {
+                            // Call KaTeX to render math within the text element of this specific option
+                            window.renderMathInElement(textElement, {
+                                // Define the delimiters KaTeX should look for
+                                delimiters: [
+                                    { left: '$$', right: '$$', display: true },  // Block math
+                                    { left: '$', right: '$', display: false },   // Inline math
+                                    { left: '\\(', right: '\\)', display: false }, // Inline math (LaTeX default)
+                                    { left: '\\[', right: '\\]', display: true }   // Block math (LaTeX default)
+                                ],
+                                // Configuration to prevent one error from stopping all rendering
+                                throwOnError: false
+                            });
+                        } else {
+                            // Log a warning if KaTeX auto-render isn't loaded
+                            console.warn("KaTeX auto-render function (renderMathInElement) not found while rendering MCQ options.");
+                        }
+                    } catch (error) {
+                        // Log any errors that occur during KaTeX rendering for this option
+                        console.error("Error rendering KaTeX in MCQ option:", error, "Raw Option Text:", optionObj.option);
+                        // The raw LaTeX text will remain visible in the textElement if rendering fails
+                    }
+                }, 0); // End of setTimeout
+            }); // End of forEach loop over options
+
+            // Hide the typing answer input field as this is an MCQ question
+            typingAnswer.style.display = 'none';
         }
 
         function renderTypingQuestion(index) {
