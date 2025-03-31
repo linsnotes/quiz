@@ -1110,6 +1110,363 @@
         }
 
 
+        // >>> ADD THIS HELPER FUNCTION (or ensure it's defined before use) <<<
+        /**
+         * Sanitizes an HTML string using DOMPurify.
+         * @param {string} htmlString The HTML string to sanitize.
+         * @returns {string} The sanitized HTML string.
+         */
+        function sanitizeHTML(htmlString) {
+            // Basic check: if it's not a string or empty, return empty string
+            if (typeof htmlString !== 'string' || !htmlString) {
+                return '';
+            }
+            // Use DOMPurify to clean the string
+            // Default configuration removes scripts, dangerous attributes etc.
+            // It should leave KaTeX delimiters ($$, $) intact as they are just text.
+            return DOMPurify.sanitize(htmlString);
+        }
+
+
+        /**
+         * Displays the question at the given index, sanitizing content before rendering.
+         * @param {number} index - The index of the question to display.
+         */
+        function showQuestion(index) {
+            // Save current answer before moving (especially for typing questions)
+            if (currentQuestion >= 0 && currentQuestion < questions.length && questions[currentQuestion] && questions[currentQuestion].type !== 'MCQ') {
+                const currentInputValue = answerInput.value.trim();
+                // Only save if there's actually input, to avoid marking as answered incorrectly
+                // The saveUserAnswer function itself checks for empty string now
+                saveUserAnswer(currentInputValue);
+            }
+
+            // Clamp index within bounds
+            if (index < 0) {
+                index = 0;
+            } else if (index >= questions.length) {
+                // Should not happen with current logic, but safe guard
+                index = questions.length - 1;
+            }
+
+            const question = questions[index];
+            if (!question) {
+                console.error(`Attempted to show question at index ${index}, but no question data found.`);
+                // Optionally show an error message or go back home
+                alert("Error: Could not load the question.");
+                goToHome();
+                return;
+            }
+
+            currentQuestion = index;
+            currentQuestionNumber.textContent = index + 1; // Safe: textContent
+
+            // Reset UI elements
+            mcqOptions.innerHTML = ''; // Clearing is safe
+            typingAnswer.style.display = 'none';
+            hintContainer.classList.remove('active');
+            hintVisible = false;
+            showHintBtn.textContent = 'Show Hint'; // Safe: textContent
+
+            // 1. Set question text using innerHTML AFTER sanitizing (needed for KaTeX)
+            const questionContent = String(question.question || '');
+            // >>> SANITIZE before innerHTML <<<
+            questionText.innerHTML = sanitizeHTML(questionContent);
+
+            // 2. Tell KaTeX to render math within the questionText element
+            // Use setTimeout to ensure the DOM is updated before KaTeX runs
+            setTimeout(() => {
+                try {
+                    if (window.renderMathInElement) {
+                        window.renderMathInElement(questionText, {
+                            delimiters: [
+                                { left: '$$', right: '$$', display: true },
+                                { left: '$', right: '$', display: false },
+                                { left: '\\(', right: '\\)', display: false },
+                                { left: '\\[', right: '\\]', display: true }
+                            ],
+                            throwOnError: false // Don't stop rendering on errors
+                        });
+                    } else {
+                        console.warn("KaTeX auto-render extension not loaded.");
+                    }
+                } catch (error) {
+                    console.error("Error rendering math with KaTeX in question:", error);
+                    // Optionally display the sanitized text if rendering fails badly
+                    // questionText.innerHTML = sanitizeHTML(questionContent); // Revert if needed
+                }
+            }, 0); // Delay ensures element is in DOM
+
+            // Set reading material if available, sanitize before innerHTML
+            const rmContent = String(question.readingMaterial || "");
+            const rmTrimmedLower = rmContent.trim().toLowerCase();
+            if (rmContent && !["", "none", "na"].includes(rmTrimmedLower)) {
+                 // >>> SANITIZE before innerHTML <<<
+                readingMaterial.innerHTML = sanitizeHTML(rmContent);
+                readingMaterial.style.display = 'block';
+                // Also render math in reading material if needed
+                setTimeout(() => {
+                    if (window.renderMathInElement) {
+                        window.renderMathInElement(readingMaterial, { /* default options */ throwOnError: false });
+                    }
+                }, 0);
+            } else {
+                readingMaterial.style.display = 'none';
+                readingMaterial.innerHTML = ''; // Clear innerHTML
+            }
+
+            // Set hint text using textContent (safer, assumes no HTML/KaTeX in hints)
+            const hintValue = question.hint || '';
+            const safeHintText = (hintValue && String(hintValue).trim() !== '' &&
+                                String(hintValue).toLowerCase() !== "none") ?
+                                String(hintValue) : // Use original string if valid
+                                "No hints are provided for this question.";
+            hintText.textContent = safeHintText; // Safe: textContent
+
+            // Render question based on type
+            if (question.type === 'MCQ') {
+                renderMCQQuestion(question);
+            } else {
+                renderTypingQuestion(index); // Pass index for loading previous answer
+            }
+
+            // Update navigation buttons state (e.g., disable prev/next at ends)
+            prevQuestionBtn.disabled = index === 0;
+            nextQuestionBtn.disabled = index === questions.length - 1;
+        }
+
+
+        /**
+         * Renders an MCQ question, sanitizing option text before rendering KaTeX.
+         * @param {object} question - The question object containing details like shuffledOptions.
+         */
+        function renderMCQQuestion(question) {
+            // Clear any previous options displayed
+            mcqOptions.innerHTML = ''; // Clearing is safe
+
+            // Ensure we have pre-shuffled options; fallback to empty array if not
+            const optionsToRender = question.shuffledOptions || [];
+
+            // Iterate through the shuffled options to create display elements
+            optionsToRender.forEach((optionObj) => {
+                // Create the main container div for the option
+                const optionElement = document.createElement('div');
+                optionElement.className = 'mcq-option';
+                // Store the original raw option text (might include LaTeX) in a data attribute
+                optionElement.dataset.option = optionObj.option;
+                // Store the assigned letter (A, B, C...)
+                optionElement.dataset.letter = optionObj.letter;
+
+                // Create the element for the option letter (e.g., 'A')
+                const letterElement = document.createElement('div');
+                letterElement.className = 'mcq-option-letter';
+                letterElement.textContent = optionObj.letter; // Safe: textContent
+
+                // Create the element for the option's text content
+                const textElement = document.createElement('div');
+                textElement.className = 'mcq-option-text';
+
+                // --- KEY CHANGE: Use innerHTML AFTER sanitizing ---
+                const optionContent = String(optionObj.option || ''); // Ensure it's a string
+                 // >>> SANITIZE before innerHTML <<<
+                textElement.innerHTML = sanitizeHTML(optionContent);
+
+                // Append the letter and text elements to the main option container
+                optionElement.appendChild(letterElement);
+                optionElement.appendChild(textElement);
+
+                // --- Check Selection State ---
+                // If this option matches the previously saved user answer for the current question, mark it as selected
+                if (userAnswers[currentQuestion] &&
+                    userAnswers[currentQuestion].isAnswered && // Only check if an answer was actually saved
+                    userAnswers[currentQuestion].userAnswer && // Ensure userAnswer exists
+                    userAnswers[currentQuestion].userAnswer.toLowerCase().trim() === optionObj.option.toLowerCase().trim()) {
+                    optionElement.classList.add('selected');
+                }
+
+                // --- Add Click Listener ---
+                // Add an event listener to handle when the user clicks on this option
+                optionElement.addEventListener('click', () => {
+                    // Remove the 'selected' class from all options first
+                    document.querySelectorAll('#mcqOptions .mcq-option').forEach(el => el.classList.remove('selected'));
+                    // Add the 'selected' class to the clicked option
+                    optionElement.classList.add('selected');
+                    // Save the user's answer (using the original raw option text stored in dataset)
+                    // saveUserAnswer needs the actual text to compare later if needed.
+                    // Sanitization happens on DISPLAY (e.g., review screen).
+                    saveUserAnswer(optionObj.option);
+                });
+
+                // Append the fully constructed option element to the main options container
+                mcqOptions.appendChild(optionElement);
+
+                // --- Trigger KaTeX Rendering for this option ---
+                // Use setTimeout with 0ms delay to ensure the element is in the DOM
+                setTimeout(() => {
+                    try {
+                        // Check if the KaTeX auto-render function is available
+                        if (window.renderMathInElement) {
+                            // Call KaTeX to render math within the text element of this specific option
+                            window.renderMathInElement(textElement, {
+                                delimiters: [
+                                    { left: '$$', right: '$$', display: true },
+                                    { left: '$', right: '$', display: false },
+                                    { left: '\\(', right: '\\)', display: false },
+                                    { left: '\\[', right: '\\]', display: true }
+                                ],
+                                throwOnError: false // Prevent one error from stopping all rendering
+                            });
+                        } else {
+                            // Log a warning if KaTeX auto-render isn't loaded
+                            console.warn("KaTeX auto-render function (renderMathInElement) not found while rendering MCQ options.");
+                        }
+                    } catch (error) {
+                        // Log any errors that occur during KaTeX rendering for this option
+                        console.error("Error rendering KaTeX in MCQ option:", error, "Raw Option Text:", optionObj.option);
+                        // The sanitized raw text will remain visible in the textElement if rendering fails
+                    }
+                }, 0); // End of setTimeout
+            }); // End of forEach loop over options
+
+            // Hide the typing answer input field as this is an MCQ question
+            typingAnswer.style.display = 'none';
+            answerInput.value = ''; // Clear typing input when switching to MCQ
+        }
+
+
+        /**
+         * Displays the review screen, sanitizing all user-generated or externally sourced
+         * content before rendering it with innerHTML, then applies KaTeX.
+         */
+        function showReviewScreen() {
+            // Clear previous review content from the container
+            reviewContainer.innerHTML = ''; // Clearing is safe
+
+            // --- Helper Function for KaTeX Rendering (ensure it's defined) ---
+            const renderKatexInElement = (element) => {
+                setTimeout(() => {
+                    try {
+                        if (window.renderMathInElement) {
+                            window.renderMathInElement(element, {
+                                delimiters: [
+                                    { left: '$$', right: '$$', display: true },
+                                    { left: '$', right: '$', display: false },
+                                    { left: '\\(', right: '\\)', display: false },
+                                    { left: '\\[', right: '\\]', display: true }
+                                ],
+                                throwOnError: false
+                            });
+                        } else {
+                            console.warn("KaTeX auto-render function (renderMathInElement) was not found during review screen generation.");
+                        }
+                    } catch (error) {
+                        console.error("Error rendering KaTeX within a review screen element:", error, "Element's innerHTML:", element.innerHTML);
+                    }
+                }, 0);
+            };
+
+            // --- Iterate through User Answers to Build Review Items ---
+            userAnswers.forEach((answer, index) => {
+                 // Retrieve the original question data
+                const question = questions[index];
+                // Handle cases where question data might be missing for an index
+                if (!question) {
+                    console.warn(`Review Screen: Missing question data for index ${index}. Skipping.`);
+                    return; // Skip this iteration
+                }
+
+                // --- Create the Main Container Div for this Question's Review ---
+                const reviewItem = document.createElement('div');
+                reviewItem.className = 'review-question';
+                // Correctness class (correct/incorrect) added below
+
+                // --- Create and Populate the Question Header Element ---
+                const questionHeader = document.createElement('div');
+                questionHeader.className = 'review-question-header';
+                // >>> SANITIZE Question Text <<<
+                const cleanQuestionText = sanitizeHTML(String(question.question || '[Question text not available]'));
+                questionHeader.innerHTML = `<strong>Question ${index + 1}:</strong> ${cleanQuestionText}`;
+                reviewItem.appendChild(questionHeader);
+
+                // --- Create the Element for Displaying Answers ---
+                const answerText = document.createElement('div');
+                answerText.className = 'review-answer'; // Correctness class added below
+
+                // --- Create and Populate the Explanation Element ---
+                const explanationDiv = document.createElement('div');
+                explanationDiv.className = 'review-explanation';
+                let explanationContent = "No explanation was provided for this question."; // Default text
+                const rawExplanation = question.explanation;
+                // Check if an explanation exists, is a string, isn't empty, and isn't just "none" (case-insensitive)
+                if (rawExplanation && typeof rawExplanation === 'string') {
+                    const trimmedExplanation = rawExplanation.trim();
+                    if (trimmedExplanation !== '' && trimmedExplanation.toLowerCase() !== 'none') {
+                        explanationContent = trimmedExplanation; // Use the valid explanation text (still raw here)
+                    }
+                }
+                // >>> SANITIZE Explanation Text <<<
+                const cleanExplanation = sanitizeHTML(explanationContent);
+                explanationDiv.innerHTML = `<strong>Explanation:</strong> ${cleanExplanation}`;
+
+                // --- Determine Content Based on Whether the Question was Answered ---
+                // Ensure 'answer' object exists before accessing its properties
+                if (!answer || !answer.isAnswered) {
+                    // Case: Question was NOT answered by the user
+                    reviewItem.classList.add('incorrect'); // Style unanswered questions as incorrect
+                    answerText.classList.add('incorrect');
+                    // >>> SANITIZE Correct Answer <<<
+                    const cleanCorrectAnswer = sanitizeHTML(String(question.answer || '[Correct answer not available]'));
+                    // Display placeholders for user answer and show the correct answer.
+                    answerText.innerHTML = `<strong>Your Answer:</strong> [Not Answered]<br><strong>Correct Answer:</strong> ${cleanCorrectAnswer}`;
+                } else {
+                    // Case: Question WAS answered by the user
+                    const isCorrect = answer.isCorrect; // Check if the stored answer was marked correct
+                    // Apply appropriate styling based on correctness
+                    reviewItem.classList.add(isCorrect ? 'correct' : 'incorrect');
+                    answerText.classList.add(isCorrect ? 'correct' : 'incorrect');
+                    // >>> SANITIZE User Answer <<<
+                    const cleanUserAnswer = sanitizeHTML(String(answer.userAnswer || '[Answer not recorded]'));
+                    // Display the user's answer.
+                    answerText.innerHTML = `<strong>Your Answer:</strong> ${cleanUserAnswer}`;
+                    // If the answer was incorrect, also display the correct answer below the user's answer.
+                    if (!isCorrect) {
+                        // >>> SANITIZE Correct Answer <<<
+                        // Use answer.correctAnswer if available (it was stored during checking), fallback to question.answer
+                        const correctAnswerToShow = answer.correctAnswer !== undefined ? answer.correctAnswer : question.answer;
+                        const cleanCorrectAnswer = sanitizeHTML(String(correctAnswerToShow || '[Correct answer not available]'));
+                        answerText.innerHTML += `<br><strong>Correct Answer:</strong> ${cleanCorrectAnswer}`;
+                    }
+                }
+
+                // --- Append Answer and Explanation Sections to the Review Item ---
+                reviewItem.appendChild(answerText);
+                // Only append explanation if it's not the default "No explanation" message
+                // (or keep it if you always want the "Explanation:" heading shown)
+                if (explanationContent !== "No explanation was provided for this question." || cleanExplanation.includes('Explanation:</strong>')) { // Check if it's not default OR if sanitization still includes the strong tag
+                     reviewItem.appendChild(explanationDiv);
+                }
+
+
+                // --- Append the Complete Review Item to the Main Review Container ---
+                reviewContainer.appendChild(reviewItem);
+
+                // --- Trigger KaTeX Rendering for Elements within this Item ---
+                // Call the helper function for each part that might contain LaTeX.
+                renderKatexInElement(questionHeader); // Render math in the question text
+                renderKatexInElement(answerText);     // Render math in the user/correct answers
+                if (explanationDiv.parentNode === reviewItem) { // Only render if appended
+                    renderKatexInElement(explanationDiv); // Render math in the explanation
+                }
+
+
+            }); // --- End of forEach loop iterating through userAnswers ---
+
+            // --- Activate the Review Screen ---
+            // After building all review items, make the review screen visible.
+            showScreen(reviewScreen);
+        }
+        
+        
         // Function to confirm Submission ID
         function confirmWebAppLink() {
             submissionId = webAppLinkInput.value.trim(); // Store the ID
@@ -1497,197 +1854,7 @@
             return arr;
         }
 
-        function showQuestion(index) {
-            // Save current answer before moving to another question
-            if (currentQuestion >= 0 && currentQuestion < questions.length && questions[currentQuestion] && questions[currentQuestion].type !== 'MCQ') {
-                const currentInputValue = answerInput.value.trim();
-                if (currentInputValue) {
-                    saveUserAnswer(currentInputValue);
-                }
-            }
 
-            if (index < 0) {
-                index = 0;
-            } else if (index >= questions.length) {
-                index = questions.length - 1;
-            }
-
-            const question = questions[index];
-            currentQuestion = index;
-            currentQuestionNumber.textContent = index + 1;
-
-            // Reset UI elements
-            mcqOptions.innerHTML = '';
-            typingAnswer.style.display = 'none';
-            hintContainer.classList.remove('active');
-            hintVisible = false;
-            showHintBtn.textContent = 'Show Hint';
-
-            // 1. Set question text using innerHTML (needed for KaTeX)
-            // Ensure question.question is treated as a string
-            const questionContent = String(question.question || '');
-            questionText.innerHTML = questionContent; // Use innerHTML
-
-            // 2. Tell KaTeX to render math within the questionText element
-            // This uses the auto-render extension, which is simpler.
-            // Make sure the DOM is updated before calling renderMathInElement.
-            // Using setTimeout with 0ms delay often works to ensure this.
-            setTimeout(() => {
-                try {
-                    if (window.renderMathInElement) {
-                         window.renderMathInElement(questionText, {
-                             // Optional: Configure delimiters if needed
-                             delimiters: [
-                                 {left: '$$', right: '$$', display: true},
-                                 {left: '$', right: '$', display: false},
-                                 {left: '\\(', right: '\\)', display: false},
-                                 {left: '\\[', right: '\\]', display: true}
-                             ],
-                             // Optional: Configure error handling
-                             throwOnError : false // Don't stop rendering on errors
-                         });
-                    } else {
-                        console.warn("KaTeX auto-render extension not loaded.");
-                    }
-                } catch (error) {
-                    console.error("Error rendering math with KaTeX:", error);
-                     // Optionally display the raw text if rendering fails badly
-                    questionText.innerHTML = questionContent; // Revert if needed
-                }
-            }, 0); // Delay ensures element is in DOM
-
-
-
-            
-
-
-            
-            // Set reading material if available
-            const rm = String(question.readingMaterial || "").trim().toLowerCase();
-            if (!["", "none", "na"].includes(rm)) {
-                readingMaterial.innerHTML = String(question.readingMaterial || ''); // Use innerHTML if math needed
-                readingMaterial.style.display = 'block';
-                // Also render math in reading material if needed
-                setTimeout(() => {
-                    if (window.renderMathInElement) {
-                         window.renderMathInElement(readingMaterial, { /* options */ });
-                    }
-                }, 0);
-            } else {
-                readingMaterial.style.display = 'none';
-                readingMaterial.innerHTML = ''; // Clear innerHTML
-            }
-
-            // Set hint text
-            const hintValue = question.hint || '';
-            hintText.textContent = hintValue && String(hintValue).trim() !== '' &&
-                String(hintValue).toLowerCase() !== "none" ?
-                hintValue : "No hints are provided for this question.";
-
-            // Render question based on type
-            if (question.type === 'MCQ') {
-                renderMCQQuestion(question);
-            } else {
-                renderTypingQuestion(index);
-            }
-        }
-
-
-        /**
-         * Renders an MCQ question, including shuffling options and handling KaTeX rendering.
-         * @param {object} question - The question object containing details like shuffledOptions.
-         */
-        function renderMCQQuestion(question) {
-            // Clear any previous options displayed
-            mcqOptions.innerHTML = '';
-
-            // Ensure we have pre-shuffled options; fallback to empty array if not
-            const optionsToRender = question.shuffledOptions || [];
-
-            // Iterate through the shuffled options to create display elements
-            optionsToRender.forEach((optionObj) => {
-                // Create the main container div for the option
-                const optionElement = document.createElement('div');
-                optionElement.className = 'mcq-option';
-                // Store the original raw option text (might include LaTeX) in a data attribute
-                optionElement.dataset.option = optionObj.option;
-                // Store the assigned letter (A, B, C...)
-                optionElement.dataset.letter = optionObj.letter;
-
-                // Create the element for the option letter (e.g., 'A')
-                const letterElement = document.createElement('div');
-                letterElement.className = 'mcq-option-letter';
-                letterElement.textContent = optionObj.letter; // Display the letter
-
-                // Create the element for the option's text content
-                const textElement = document.createElement('div');
-                textElement.className = 'mcq-option-text';
-
-                // --- KEY CHANGE: Use innerHTML ---
-                // Set the content using innerHTML so that HTML tags and LaTeX delimiters are parsed
-                textElement.innerHTML = optionObj.option;
-
-                // Append the letter and text elements to the main option container
-                optionElement.appendChild(letterElement);
-                optionElement.appendChild(textElement);
-
-                // --- Check Selection State ---
-                // If this option matches the previously saved user answer for the current question, mark it as selected
-                if (userAnswers[currentQuestion] &&
-                    userAnswers[currentQuestion].isAnswered && // Only check if an answer was actually saved
-                    userAnswers[currentQuestion].userAnswer &&
-                    userAnswers[currentQuestion].userAnswer.toLowerCase().trim() === optionObj.option.toLowerCase().trim()) {
-                    optionElement.classList.add('selected');
-                }
-
-                // --- Add Click Listener ---
-                // Add an event listener to handle when the user clicks on this option
-                optionElement.addEventListener('click', () => {
-                    // Remove the 'selected' class from all options first
-                    document.querySelectorAll('#mcqOptions .mcq-option').forEach(el => el.classList.remove('selected'));
-                    // Add the 'selected' class to the clicked option
-                    optionElement.classList.add('selected');
-                    // Save the user's answer (using the original option text, which might contain LaTeX)
-                    saveUserAnswer(optionObj.option);
-                });
-
-                // Append the fully constructed option element to the main options container
-                mcqOptions.appendChild(optionElement);
-
-                // --- KEY CHANGE: Trigger KaTeX Rendering ---
-                // Use setTimeout with 0ms delay to ensure the element is in the DOM
-                // before attempting to render math inside it.
-                setTimeout(() => {
-                    try {
-                        // Check if the KaTeX auto-render function is available
-                        if (window.renderMathInElement) {
-                            // Call KaTeX to render math within the text element of this specific option
-                            window.renderMathInElement(textElement, {
-                                // Define the delimiters KaTeX should look for
-                                delimiters: [
-                                    { left: '$$', right: '$$', display: true },  // Block math
-                                    { left: '$', right: '$', display: false },   // Inline math
-                                    { left: '\\(', right: '\\)', display: false }, // Inline math (LaTeX default)
-                                    { left: '\\[', right: '\\]', display: true }   // Block math (LaTeX default)
-                                ],
-                                // Configuration to prevent one error from stopping all rendering
-                                throwOnError: false
-                            });
-                        } else {
-                            // Log a warning if KaTeX auto-render isn't loaded
-                            console.warn("KaTeX auto-render function (renderMathInElement) not found while rendering MCQ options.");
-                        }
-                    } catch (error) {
-                        // Log any errors that occur during KaTeX rendering for this option
-                        console.error("Error rendering KaTeX in MCQ option:", error, "Raw Option Text:", optionObj.option);
-                        // The raw LaTeX text will remain visible in the textElement if rendering fails
-                    }
-                }, 0); // End of setTimeout
-            }); // End of forEach loop over options
-
-            // Hide the typing answer input field as this is an MCQ question
-            typingAnswer.style.display = 'none';
-        }
 
         function renderTypingQuestion(index) {
             typingAnswer.style.display = 'block';
@@ -1871,131 +2038,6 @@
             });
         }
 
-        /**
-         * Displays the review screen, rendering each question, user's answer, correct answer,
-         * and explanation. Handles KaTeX rendering for all relevant text content.
-         */
-        function showReviewScreen() {
-            // Clear previous review content from the container
-            reviewContainer.innerHTML = '';
-
-            // --- Helper Function for KaTeX Rendering ---
-            // This function encapsulates the logic to render math in a specific element,
-            // including error handling and ensuring the element is ready in the DOM.
-            const renderKatexInElement = (element) => {
-                // Use setTimeout with 0ms delay. This pushes the rendering task
-                // to the end of the current browser event loop cycle, ensuring
-                // the 'element' has been fully added to the document's structure.
-                setTimeout(() => {
-                    try {
-                        // Check if the KaTeX auto-render function is globally available
-                        if (window.renderMathInElement) {
-                            // Execute KaTeX rendering on the provided element
-                            window.renderMathInElement(element, {
-                                // Define the delimiters KaTeX should recognize for math expressions
-                                delimiters: [
-                                    { left: '$$', right: '$$', display: true },  // For block display math
-                                    { left: '$', right: '$', display: false },   // For inline math
-                                    { left: '\\(', right: '\\)', display: false }, // LaTeX standard inline
-                                    { left: '\\[', right: '\\]', display: true }   // LaTeX standard block
-                                ],
-                                // Configuration to prevent errors in one math expression
-                                // from halting the rendering of others on the page.
-                                throwOnError: false
-                            });
-                        } else {
-                            // Log a warning if KaTeX library seems unavailable
-                            console.warn("KaTeX auto-render function (renderMathInElement) was not found during review screen generation.");
-                        }
-                    } catch (error) {
-                        // Log any errors encountered during the KaTeX rendering process for this specific element
-                        console.error("Error rendering KaTeX within a review screen element:", error, "Element's innerHTML:", element.innerHTML);
-                        // Note: If rendering fails, the original text (including LaTeX markup) will remain visible.
-                    }
-                }, 0); // End of setTimeout callback
-            }; // End of renderKatexInElement helper function
-
-            // --- Iterate through User Answers to Build Review Items ---
-            // Loop over the userAnswers array, which holds the results for each question.
-            userAnswers.forEach((answer, index) => {
-                // Retrieve the original question data corresponding to this answer's index
-                const question = questions[index]; // Assumes 'questions' array is still accessible
-
-                // --- Create the Main Container Div for this Question's Review ---
-                const reviewItem = document.createElement('div');
-                // Apply base styling class
-                reviewItem.className = 'review-question';
-                // Correctness class (correct/incorrect) will be added later based on the answer status
-
-                // --- Create and Populate the Question Header Element ---
-                const questionHeader = document.createElement('div');
-                questionHeader.className = 'review-question-header';
-                // Use innerHTML to allow potential LaTeX rendering within the question text.
-                // Fallback text is provided if the question text is missing.
-                questionHeader.innerHTML = `<strong>Question ${index + 1}:</strong> ${question.question || '[Question text not available]'}`;
-                reviewItem.appendChild(questionHeader); // Add header to the review item
-
-                // --- Create the Element for Displaying Answers ---
-                const answerText = document.createElement('div');
-                // Apply base styling class. Correctness class added below.
-                answerText.className = 'review-answer';
-
-                // --- Create and Populate the Explanation Element ---
-                const explanationDiv = document.createElement('div');
-                explanationDiv.className = 'review-explanation';
-                let explanationContent = "No explanation was provided for this question."; // Default text
-                // Check if an explanation exists, is a string, isn't empty, and isn't just "none" (case-insensitive)
-                if (question.explanation && typeof question.explanation === 'string') {
-                    const trimmedExplanation = question.explanation.trim();
-                    if (trimmedExplanation !== '' && trimmedExplanation.toLowerCase() !== 'none') {
-                        explanationContent = trimmedExplanation; // Use the valid explanation text
-                    }
-                }
-                // Use innerHTML for potential LaTeX in the explanation.
-                explanationDiv.innerHTML = `<strong>Explanation:</strong> ${explanationContent}`;
-
-
-                // --- Determine Content Based on Whether the Question was Answered ---
-                if (!answer || !answer.isAnswered) {
-                    // Case: Question was NOT answered by the user
-                    reviewItem.classList.add('incorrect'); // Style unanswered questions as incorrect
-                    answerText.classList.add('incorrect');
-                    // Display placeholders for user answer and show the correct answer. Use innerHTML for potential LaTeX.
-                    answerText.innerHTML = `<strong>Your Answer:</strong> [Not Answered]<br><strong>Correct Answer:</strong> ${question.answer || '[Correct answer not available]'}`;
-                } else {
-                    // Case: Question WAS answered by the user
-                    const isCorrect = answer.isCorrect; // Check if the stored answer was marked correct
-                    // Apply appropriate styling based on correctness
-                    reviewItem.classList.add(isCorrect ? 'correct' : 'incorrect');
-                    answerText.classList.add(isCorrect ? 'correct' : 'incorrect');
-                    // Display the user's answer. Use innerHTML for potential LaTeX.
-                    answerText.innerHTML = `<strong>Your Answer:</strong> ${answer.userAnswer || '[Answer not recorded]'}`;
-                    // If the answer was incorrect, also display the correct answer below the user's answer.
-                    if (!isCorrect) {
-                        // Use innerHTML for potential LaTeX in the correct answer.
-                        answerText.innerHTML += `<br><strong>Correct Answer:</strong> ${answer.correctAnswer || '[Correct answer not available]'}`;
-                    }
-                }
-
-                // --- Append Answer and Explanation Sections to the Review Item ---
-                reviewItem.appendChild(answerText);
-                reviewItem.appendChild(explanationDiv);
-
-                // --- Append the Complete Review Item to the Main Review Container ---
-                reviewContainer.appendChild(reviewItem);
-
-                // --- Trigger KaTeX Rendering for Elements within this Item ---
-                // Call the helper function for each part that might contain LaTeX.
-                renderKatexInElement(questionHeader); // Render math in the question text
-                renderKatexInElement(answerText);     // Render math in the user/correct answers
-                renderKatexInElement(explanationDiv); // Render math in the explanation
-
-            }); // --- End of forEach loop iterating through userAnswers ---
-
-            // --- Activate the Review Screen ---
-            // After building all review items, make the review screen visible.
-            showScreen(reviewScreen);
-        }
 
         function backToResults() {
             showScreen(resultScreen);
