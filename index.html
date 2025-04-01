@@ -1861,7 +1861,7 @@
                 let skipReason = "";
                 if (!submissionUrl) {
                     console.log("Submission skipped: No valid submission URL was configured for this quiz.");
-                    skipReason = "Submission link missing";
+                    skipReason = "The creator of this quiz does not collect the results";
                 } else if (!userConsentedToSubmit) {
                     console.log("Submission skipped: User did not consent at the start.");
                     skipReason = "Consent declined";
