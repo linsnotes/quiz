@@ -1703,17 +1703,23 @@
          * Attempts to submit quiz data to the specified Google Apps Script Web App URL.
          * Uses a hidden form and iframe to avoid page navigation.
          * Includes offline check and timeout.
+         * [STABILITY ENHANCED for input creation loop]
          *
          * @param {object} quizData The data object to submit (e.g., name, score, time).
          * @param {string} fullUrl The complete Google Apps Script Web App URL to POST to.
          * @returns {Promise<string>} A promise that resolves with 'attempt_finished' if the iframe loads
          *                            (indicating the browser sent the request, regardless of server response),
-         *                            or rejects with an Error on offline, timeout, or setup failure.
+         *                            or rejects with an Error on offline, timeout, or setup/append failure.
          */
         async function submitQuizData(quizData, fullUrl) {
             if (!navigator.onLine) {
                 console.error("Submission aborted: Browser is offline.");
                 return Promise.reject(new Error('Browser is offline. Submission failed.'));
+            }
+
+            if (!isValidWebAppUrl(fullUrl)) {
+                console.error("Submission aborted: Invalid Web App URL provided.", fullUrl);
+                return Promise.reject(new Error('Invalid Submission URL format.'));
             }
 
             console.log("Submitting quiz data to URL:", fullUrl);
@@ -1726,54 +1732,73 @@
 
                 const cleanup = () => {
                     clearTimeout(timeoutId);
-
-                    if (iframe && iframe.parentNode) {
-                        try {
-                            iframe.parentNode.removeChild(iframe);
-                        } catch (e) {
-                            console.warn("Could not remove iframe during cleanup:", e.message);
-                        }
-                    }
-
-                    if (form && form.parentNode) {
-                        try {
-                            form.parentNode.removeChild(form);
-                        } catch (e) {
-                            console.warn("Could not remove form during cleanup:", e.message);
-                        }
-                    }
-
-                    iframe = null;
-                    form = null;
+                    if (iframe && iframe.parentNode) { try { iframe.parentNode.removeChild(iframe); } catch (e) { console.warn("Cleanup iframe removal error:", e.message); } }
+                    if (form && form.parentNode) { try { form.parentNode.removeChild(form); } catch (e) { console.warn("Cleanup form removal error:", e.message); } }
+                    iframe = null; form = null;
                 };
 
                 try {
                     form = document.createElement('form');
+                    if (!form || !(form instanceof Node)) {
+                        throw new Error("Failed to create form element.");
+                    }
                     form.style.display = 'none';
                     form.method = 'POST';
                     form.action = fullUrl;
                     form.target = 'quizSubmitTarget';
 
                     for (const key in quizData) {
-                        if (Object.prototype.hasOwnProperty.call(quizData, key) && quizData[key] !== undefined && quizData[key] !== null) {
-                            const input = document.createElement('input');
-                            input.type = 'hidden';
-                            input.name = key;
-                            input.value = typeof quizData[key] === 'object'
-                                ? JSON.stringify(quizData[key])
-                                : String(quizData[key]);
-                            form.appendChild(input);
+                        if (Object.prototype.hasOwnProperty.call(quizData, key)) {
+                            const value = quizData[key];
+
+                            if (value === undefined || value === null) {
+                                console.warn(`Skipping hidden input for key "${key}" because value is ${value}.`);
+                                continue;
+                            }
+
+                            let inputElement = null;
+                            let assignedValue = '';
+
+                            try {
+                                inputElement = document.createElement('input');
+                                if (!inputElement || !(inputElement instanceof Node)) {
+                                    throw new Error(`Failed to create input element for key "${key}".`);
+                                }
+                                inputElement.type = 'hidden';
+                                inputElement.name = key;
+
+                                try {
+                                    assignedValue = typeof value === 'object'
+                                        ? JSON.stringify(value)
+                                        : String(value);
+                                } catch (stringifyError) {
+                                    console.error(`Error converting value for key "${key}" to string:`, value, stringifyError);
+                                    assignedValue = `ERROR_SERIALIZING_${key}`;
+                                }
+
+                                inputElement.value = assignedValue;
+                                form.appendChild(inputElement);
+
+                            } catch (inputError) {
+                                console.error(`Error processing or appending input for key "${key}":`, inputError);
+                                reject(new Error(`Failed to process/append input for key "${key}". Submission aborted.`));
+                                cleanup();
+                                return;
+                            }
                         }
                     }
 
                     iframe = document.createElement('iframe');
+                    if (!iframe || !(iframe instanceof Node)) {
+                        throw new Error("Failed to create iframe element.");
+                    }
                     iframe.name = 'quizSubmitTarget';
                     iframe.style.display = 'none';
 
                     iframe.onload = () => {
                         if (resolved) return;
                         resolved = true;
-                        console.log("Submission iframe loaded (could be success or browser/server error page).");
+                        console.log("Submission iframe loaded.");
                         cleanup();
                         resolve('attempt_finished');
                     };
@@ -1794,27 +1819,28 @@
                         reject(new Error('Submission timed out'));
                     }, 10000);
 
+                    if (!document.body) {
+                        throw new Error("Document body not found, cannot append form/iframe.");
+                    }
                     document.body.appendChild(iframe);
                     document.body.appendChild(form);
                     form.submit();
                     console.log("Form submitted via hidden iframe.");
-                } catch (formError) {
-                    console.error("Error setting up form submission:", formError);
+
+                } catch (setupError) {
+                    console.error("Fatal error during submission setup:", setupError);
                     if (!resolved) {
                         resolved = true;
                         clearTimeout(timeoutId);
-                        if (iframe && iframe.parentNode) { try { iframe.parentNode.removeChild(iframe); } catch(e){} }
-                        if (form && form.parentNode) { try { form.parentNode.removeChild(form); } catch(e){} }
+                        cleanup();
                     }
-                    reject(formError);
+                    reject(setupError);
                 }
             });
         }
 
-        /**
-         * Finalizes the quiz: stops the timer, calculates results, attempts submission
-         * if URL exists and user consented, updates the results screen, and displays it.
-         */
+        // =========================================================================
+
         async function finishQuiz() {
             stopTimer();
             quizCompleted = true;
@@ -1865,6 +1891,7 @@
                     submissionNotification.classList.add('error');
                     submissionNotification.style.display = 'block';
                 }
+
             } else {
                 if (!submissionUrl) {
                     console.log("Submission skipped: No valid submission URL was configured for this quiz.");
@@ -1876,10 +1903,8 @@
             showScreen(resultScreen);
         }
 
-        /**
-         * Resets the application state to its initial condition, clears inputs,
-         * stops timers, and displays the welcome screen.
-         */
+        // =========================================================================
+
         function goToHome() {
             console.log("Returning to home screen, resetting state.");
 
@@ -1925,9 +1950,6 @@
 
             showScreen(welcomeScreen);
         }
-
-
-
 
 
         
