@@ -524,18 +524,23 @@
 
         /* New style for submission notification */
         .submission-notification {
-            background-color: var(--success-color);
-            color: white;
             padding: 1rem;
-            border-radius: var(--border-radius);
             margin-bottom: 1.5rem;
+            border-radius: var(--border-radius);
             text-align: center;
-            animation: fadeIn 0.5s ease;
+            background-color: #f0f0f0; /* Default/Submitting style */
+            color: #333;
         }
 
         /* Add this rule */
         .submission-notification.error {
-            background-color: var(--error-color); /* Use your theme's error color */
+            background-color: var(--error-color); /* Red for errors */
+            color: white;
+        }
+
+        .submission-notification.success {
+            background-color: var(--success-color); /* Green for success */
+            color: white;
         }
 
         @keyframes pulse {
@@ -1700,137 +1705,116 @@
         }
 
         /**
-         * [UPDATED] Submits quiz data using a dynamically created, hidden HTML form.
-         * This method causes a page navigation to the script URL's response page on success.
-         * It's simpler and often more reliable than iframe-based methods.
-         * Retains the original function name 'submitQuizData'.
+         * [UPDATED] Submits quiz data asynchronously using the Fetch API.
+         * Displays submission status in the #submissionNotification element.
+         * Does NOT cause page navigation.
          *
-         * @param {object} quizData The data object to submit (keys should match Apps Script e.parameter).
+         * @param {object} quizData The data object to submit.
          * @param {string} fullUrl The complete Google Apps Script Web App URL to POST to.
+         * @param {HTMLElement} notificationElement The div element to display status messages.
+         * @returns {Promise<boolean>} A promise that resolves to true on successful submission (HTTP 2xx), false otherwise.
          */
-        function submitQuizData(quizData, fullUrl) {
-            // 1. Check Network Connection
+        async function submitQuizData(quizData, fullUrl, notificationElement) {
+            // 1. Clear previous notification state
+            notificationElement.textContent = '';
+            notificationElement.classList.remove('error', 'success');
+            notificationElement.style.display = 'none';
+
+            // 2. Check Network Connection
             if (!navigator.onLine) {
                 console.error("Submission aborted: Browser is offline.");
-                const submissionNotification = document.getElementById('submissionNotification');
-                if (submissionNotification) {
-                    submissionNotification.textContent = "Submission Failed: You seem to be offline. Please check your connection, take a screenshot of your results, and inform your teacher.";
-                    submissionNotification.classList.add('error');
-                    submissionNotification.style.display = 'block';
-                } else {
-                    alert("Submission failed: You appear to be offline. Please check your connection and try submitting again later, or take a screenshot.");
-                }
-                return;
+                notificationElement.textContent = "Submission Failed: You seem to be offline. Check connection and try screenshotting.";
+                notificationElement.classList.add('error');
+                notificationElement.style.display = 'block';
+                return false;
             }
 
-            // 2. Validate URL (reuse your existing isValidWebAppUrl function)
+            // 3. Validate URL
             if (!isValidWebAppUrl(fullUrl)) {
                 console.error("Submission aborted: Invalid Web App URL provided.", fullUrl);
-                const submissionNotification = document.getElementById('submissionNotification');
-                if (submissionNotification) {
-                    submissionNotification.textContent = "Submission Failed: The submission link is invalid. Please inform the quiz creator and take a screenshot.";
-                    submissionNotification.classList.add('error');
-                    submissionNotification.style.display = 'block';
-                } else {
-                    alert("Submission failed: The submission link is invalid. Please inform the quiz creator.");
-                }
-                return;
+                notificationElement.textContent = "Submission Failed: Invalid submission link. Inform creator & screenshot.";
+                notificationElement.classList.add('error');
+                notificationElement.style.display = 'block';
+                return false;
             }
 
-            // 3. Validate Data (Basic Check)
+            // 4. Validate Data (Basic Check)
             if (typeof quizData !== 'object' || quizData === null) {
                 console.error("Submission aborted: Invalid quizData provided.", quizData);
-                const submissionNotification = document.getElementById('submissionNotification');
-                if (submissionNotification) {
-                    submissionNotification.textContent = "Submission Failed: Internal error preparing data. Please take a screenshot and inform the quiz creator.";
-                    submissionNotification.classList.add('error');
-                    submissionNotification.style.display = 'block';
-                } else {
-                    alert("Submission failed: Internal error preparing data. Please inform the quiz creator.");
-                }
-                return;
+                notificationElement.textContent = "Submission Failed: Internal data error. Inform creator & screenshot.";
+                notificationElement.classList.add('error');
+                notificationElement.style.display = 'block';
+                return false;
             }
 
-            console.log("[Form Based] Preparing submission to:", fullUrl);
-            console.log("[Form Based] Data to submit:", quizData);
+            console.log("[Fetch Based] Preparing submission to:", fullUrl);
+            console.log("[Fetch Based] Data to submit:", quizData);
 
-            let form = null;
+            // 5. Display "Submitting..." message
+            notificationElement.textContent = "Submitting results to teacher...";
+            notificationElement.classList.remove('error', 'success');
+            notificationElement.style.display = 'block';
 
             try {
-                // 4. Create Hidden Form
-                form = document.createElement('form');
-                form.method = 'POST';
-                form.action = fullUrl;
-                form.style.display = 'none';
-
-                // 5. Create Hidden Input Fields for Each Data Point
+                // 6. Create FormData object
+                const formData = new FormData();
                 for (const key in quizData) {
                     if (Object.prototype.hasOwnProperty.call(quizData, key)) {
-                        const value = quizData[key];
-
-                        if (value === undefined || value === null) {
-                            console.warn(`[Form Based] Skipping form field for key "${key}" because value is ${value}.`);
-                            continue;
-                        }
-
-                        const input = document.createElement('input');
-                        input.type = 'hidden';
-                        input.name = key;
-                        input.value = String(value);
-
-                        form.appendChild(input);
+                        formData.append(key, quizData[key]);
                     }
                 }
 
-                // 6. Append Form to Body
-                if (!document.body) {
-                    throw new Error("Document body not found. Cannot append form.");
+                // 7. Perform the fetch request
+                const response = await fetch(fullUrl, {
+                    method: 'POST',
+                    body: formData
+                    // mode: 'no-cors' // Optional for fire-and-forget scenarios
+                });
+
+                // 8. Check HTTP Status
+                if (!response.ok) {
+                    throw new Error(`Submission failed: Server responded with status ${response.status} ${response.statusText}`);
                 }
-                document.body.appendChild(form);
 
-                // 7. Submit the Form
-                console.log("[Form Based] Submitting form...");
-                form.submit();
-
-                // 8. Optional Cleanup
-                setTimeout(() => {
-                    if (form && form.parentNode) {
-                        try { form.parentNode.removeChild(form); } catch (e) { /* ignore */ }
-                    }
-                }, 100);
+                // 9. Success
+                console.log("[Fetch Based] Submission successful (HTTP status OK).");
+                notificationElement.textContent = "Quiz data submitted successfully to teacher!";
+                notificationElement.classList.add('success');
+                notificationElement.classList.remove('error');
+                notificationElement.style.display = 'block';
+                return true;
 
             } catch (error) {
-                console.error("[Form Based] Fatal error during form submission setup:", error);
-                const submissionNotification = document.getElementById('submissionNotification');
-                if (submissionNotification) {
-                    submissionNotification.textContent = `Submission Failed: Error setting up submission (${error.message}). Please take a screenshot and inform the quiz creator.`;
-                    submissionNotification.classList.add('error');
-                    submissionNotification.style.display = 'block';
-                } else {
-                    alert(`Submission failed due to an internal error: ${error.message}. Please take a screenshot of your results and inform your teacher.`);
-                }
-
-                if (form && form.parentNode) {
-                    try { form.parentNode.removeChild(form); } catch (e) { /* ignore */ }
-                }
+                // 10. Handle Fetch Errors
+                console.error("[Fetch Based] Submission error:", error);
+                notificationElement.textContent = `Submission Failed: ${error.message}. Please take a screenshot of results and inform your teacher.`;
+                notificationElement.classList.add('error');
+                notificationElement.classList.remove('success');
+                notificationElement.style.display = 'block';
+                return false;
             }
         }
 
         // =========================================================================
 
-        // [UPDATED] Handles the end of the quiz, calculates results, displays them,
-        // and initiates submission using the form-based submitQuizData function.
-        // NOTE: This function is NO LONGER async.
-        function finishQuiz() {
+        // [UPDATED] Make this function async
+        async function finishQuiz() {
             stopTimer(); // Stop the timer first
             quizCompleted = true;
 
-            // --- Reset Submission Notification Area ---
-            // Ensure it's hidden and cleared before calculating/displaying results
+            // --- Get reference to the Notification Element ---
+            // Make sure this element exists in your HTML:
+            // <div id="submissionNotification" class="submission-notification" style="display: none;"></div>
             const submissionNotification = document.getElementById('submissionNotification');
-            submissionNotification.style.display = 'none';
-            submissionNotification.textContent = '';
-            submissionNotification.classList.remove('error'); // Remove error class if previously set
+            if (!submissionNotification) {
+                console.error("Critical Error: Submission notification element (#submissionNotification) not found in HTML.");
+                alert("Internal Error: Cannot display submission status. Please take a screenshot.");
+            } else {
+                // --- Reset Submission Notification Area ---
+                submissionNotification.style.display = 'none';
+                submissionNotification.textContent = '';
+                submissionNotification.classList.remove('error', 'success');
+            }
 
             // --- Calculate Results (No changes needed here) ---
             const totalAttempted = userAnswers.filter(answer => answer && answer.isAnswered).length;
@@ -1839,53 +1823,41 @@
 
             // Update result display elements (No changes needed here)
             totalQuestionsAttempted.textContent = totalAttempted;
-            correctAnswers.textContent = correct; // For the score display like 8/10
-            correctAnswersCount.textContent = correct; // For the "Correct Answers" card
-            incorrectAnswersCount.textContent = incorrect; // For the "Incorrect Answers" card
-            totalQuestionsResult.textContent = questions.length; // For the score display like 8/10
+            correctAnswers.textContent = correct;
+            correctAnswersCount.textContent = correct;
+            incorrectAnswersCount.textContent = incorrect;
+            totalQuestionsResult.textContent = questions.length;
 
             // Calculate and display time spent (No changes needed here)
             const endTime = new Date();
             const elapsedMilliseconds = endTime - startTime;
-            const elapsedSeconds = Math.max(0, Math.floor(elapsedMilliseconds / 1000)); // Ensure non-negative
+            const elapsedSeconds = Math.max(0, Math.floor(elapsedMilliseconds / 1000));
             const minutes = Math.floor(elapsedSeconds / 60);
             const seconds = elapsedSeconds % 60;
             const formattedTimeSpent = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-            timeSpent.textContent = formattedTimeSpent; // Update Time Spent card
+            timeSpent.textContent = formattedTimeSpent;
 
             // --- Show the Results Screen FIRST ---
-            // Crucial: Display results to the user *before* attempting submission,
-            // as submission will navigate the page.
             showScreen(resultScreen);
 
             // --- Attempt Submission (if applicable) ---
-            if (submissionUrl && userConsentedToSubmit) {
-                console.log("Attempting result submission via form (URL found and consent given).");
+            if (submissionUrl && userConsentedToSubmit && submissionNotification) {
+                console.log("Attempting result submission via fetch (URL found and consent given).");
 
-                // Prepare data matching the Google Apps Script doPost function's expected parameters
                 const quizData = {
-                    name: studentName.textContent || "Anonymous", // Get name from the displayed element
-                    quizId: sheetIdInput.value || "Unknown Quiz ID", // Get Quiz ID used to start
-                    stats: buildStatsString(), // Use your existing function to create the summary string
+                    name: studentName.textContent || "Anonymous",
+                    quizId: sheetIdInput.value || "Unknown Quiz ID",
+                    stats: buildStatsString(),
                     totalQuestions: questions.length,
                     questionsAttempted: totalAttempted,
                     correctAnswers: correct,
                     incorrectAnswers: incorrect,
-                    timeSpent: formattedTimeSpent // Send the formatted time string
-                    // Note: The Apps Script adds 'submissionDate' itself
+                    timeSpent: formattedTimeSpent
                 };
 
-                // Call the NEW form-based submission function directly (NO await)
-                // This function will handle its own pre-submission errors via alerts/notifications
-                // and will navigate the page on successful submission initiation.
-                submitQuizData(quizData, submissionUrl);
+                await submitQuizData(quizData, submissionUrl, submissionNotification);
 
-                // !! IMPORTANT !!: No code should be placed here expecting to run after successful submission,
-                // as the page will have navigated away. The new submitQuizData handles pre-submit errors.
-                // The confirmation of success is the user seeing the Apps Script response page.
-
-            } else {
-                // Submission is skipped - Display message on the results screen
+            } else if (submissionNotification) {
                 let skipReason = "";
                 if (!submissionUrl) {
                     console.log("Submission skipped: No valid submission URL was configured for this quiz.");
@@ -1893,16 +1865,17 @@
                 } else if (!userConsentedToSubmit) {
                     console.log("Submission skipped: User did not consent at the start.");
                     skipReason = "Consent declined";
+                } else {
+                    skipReason = "Unknown reason";
                 }
 
-                // Update the notification area to inform the user why it wasn't submitted
                 submissionNotification.textContent = `Results not submitted (${skipReason}). Please take a screenshot.`;
-                // submissionNotification.classList.add('error'); // Optional: style skipped submissions differently if needed
                 submissionNotification.style.display = 'block';
             }
 
-            // The results screen is already shown before this point.
+            // The results screen is already shown. User stays here.
         }
+
 
         // =========================================================================
 
