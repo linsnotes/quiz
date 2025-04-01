@@ -688,24 +688,6 @@
 
         </div>
 
-        <!-- New screen for Result Submission input -->
-        <div id="webAppLinkScreen" class="screen">
-            <h2>Submit Quiz Results</h2>
-            <p>If your teacher provided a Submission ID, you can submit your quiz results directly to them.</p>
-            <div class="input-group">
-                <!-- CHANGE Label Text -->
-                <label for="webAppLinkInput">Submission ID (Optional)</label>
-                <!-- CHANGE Placeholder Text -->
-                <input type="text" id="webAppLinkInput" placeholder="Enter Submission ID provided by teacher">
-                <!-- CHANGE Paragraph Text -->
-                <p>This ID will be used to send your quiz results to your teacher.</p>
-            </div>
-            <div class="btn-group">
-                <button id="skipWebAppLinkBtn" class="btn btn-secondary">Skip</button>
-                <button id="confirmWebAppLinkBtn" class="btn" disabled>OK</button>
-            </div>
-        </div>
-
         <div id="loadingScreen" class="screen">
             <div class="loading">
                 <div class="spinner"></div>
@@ -797,7 +779,7 @@
     <script data-goatcounter="https://linsnotes.goatcounter.com/count" async src="https://gc.zgo.at/count.js" integrity="sha512-JAlHYZ7sDXF98EQK5HABwb2k1jplfFP93BqY4B6fdHSh0XiAqIjO4gyXe8tdNFdHPYrg75grUX853FHYCzw3Dg==" crossorigin="anonymous"></script>
 
     <script>
-        let enableSubmissionIdScreen = false; 
+
        // DOM Elements
         const appHeader = document.getElementById('appHeader');
         const appFooter = document.getElementById('appFooter');
@@ -815,10 +797,6 @@
 
         
         // New DOM elements for Web App link screen
-        const webAppLinkScreen = document.getElementById('webAppLinkScreen');
-        const webAppLinkInput = document.getElementById('webAppLinkInput');
-        const skipWebAppLinkBtn = document.getElementById('skipWebAppLinkBtn');
-        const confirmWebAppLinkBtn = document.getElementById('confirmWebAppLinkBtn');
         const submissionNotification = document.getElementById('submissionNotification');
 
         const nameInput = document.getElementById('nameInput');
@@ -855,9 +833,9 @@
         const reviewHomeBtn = document.getElementById('reviewHomeBtn');
 
         // App State
-        const WEB_APP_BASE_URL = 'https://script.google.com/macros/s/';
-        const WEB_APP_URL_SUFFIX = '/exec';
         let questions = [];
+        let submissionUrl = null; // To store the full URL from J2
+        let userConsentedToSubmit = false; // To track user consent
         let currentQuestion = 0;
         let startTime;
         let timerInterval;
@@ -866,7 +844,6 @@
         let hintVisible = false;
         let quizTimeLimit = null; // Global time limit in minutes
         // New state variable for submission ID link
-        let submissionId = null;
         const QUIZ_LIST_SHEET_ID = '1pNzZ1Kpz4hprwLb412eN7dmMl99rB1Z4m1MZVFVkFlA';
         let builtInQuizzes = []; // To store the loaded list
 
@@ -882,10 +859,7 @@
         homeBtn.addEventListener('click', goToHome);
         backToResultsBtn.addEventListener('click', backToResults);
         reviewHomeBtn.addEventListener('click', goToHome);
-        // New event listeners for Web App link handling
-        skipWebAppLinkBtn.addEventListener('click', skipWebAppLink);
-        confirmWebAppLinkBtn.addEventListener('click', confirmWebAppLink);
-        webAppLinkInput.addEventListener('input', validateWebAppLink);
+
 
         builtInQuizSelect.addEventListener('change', () => {
             // Enable the button only if a valid quiz (not the default placeholder) is selected
@@ -1028,50 +1002,27 @@
             }
         }
 
-
-        function proceedToQuiz() {
-            if (enableSubmissionIdScreen) {
-                // Show the Submission ID screen if enabled
-                showScreen(webAppLinkScreen);
-            } else {
-                // Skip the Submission ID screen if disabled
-                submissionId = null; // Ensure submissionId is null if skipping
-                loadQuizQuestions(); // Load questions directly
-            }
-        }
-        
-        /**
-         * Starts the quiz selected from the built-in dropdown menu.
-         */
         function startBuiltInQuiz() {
             const name = nameInput.value.trim();
-            const selectedQuizId = builtInQuizSelect.value; // Get ID from dropdown
+            const selectedQuizId = builtInQuizSelect.value;
 
             if (!name) {
                 alert('Please enter your name. Your name is used solely for your quiz summary and is removed when you refresh the page.');
                 return;
             }
-
-            // Check if a valid quiz is selected (should be redundant due to button state, but safe)
             if (!selectedQuizId) {
                 alert('Please select a quiz from the dropdown list.');
                 return;
             }
 
-            // *** Key Step: Set the main sheetIdInput's value ***
-            // This allows us to reuse the existing loadQuizQuestions logic
-            // which reads from sheetIdInput.
-            sheetIdInput.value = selectedQuizId;
+            sheetIdInput.value = selectedQuizId; // Set the ID for potential later use (like in results)
+            studentName.textContent = name;      // Set student name display
 
-            // Set the student name
-            studentName.textContent = name;
-            
-            // Call the central function to proceed
-            proceedToQuiz(); 
+            // --- Start Fetch and Consent Flow ---
+            initiateQuizStart(selectedQuizId);
+            // --- End Fetch and Consent Flow ---
         }
 
-        
-        // Modified startQuiz function to show Web App link screen
         function startCustomQuiz() {
             const name = nameInput.value.trim();
             const sheetId = sheetIdInput.value.trim();
@@ -1080,39 +1031,66 @@
                 alert('Please enter your name. Your name is used solely for your quiz summary and is removed when you refresh the page.');
                 return;
             }
-
             if (!sheetId) {
                 alert('Please enter a Custom Quiz ID, or select a quiz from the dropdown list.');
                 return;
             }
 
-            // Set the student name
-            studentName.textContent = name;
-            
-            // Call the central function to proceed
-            proceedToQuiz(); 
+            studentName.textContent = name; // Set student name display
+
+            // --- Start Fetch and Consent Flow ---
+            initiateQuizStart(sheetId);
+            // --- End Fetch and Consent Flow ---
         }
 
-        // Function to validate Web App link
-        // Function to validate Submission ID
-        function validateWebAppLink() {
-            const id = webAppLinkInput.value.trim();
+        // NEW function to handle the common start logic
+        function initiateQuizStart(quizId) {
+            showScreen(loadingScreen);
+            userConsentedToSubmit = false; // Reset consent flag
+            submissionUrl = null;        // Reset submission URL
 
-            // Basic validation: enable OK button if the input is not empty
-            // and doesn't contain characters typical of a full URL (like / or :).
-            if (id && !id.includes('/') && !id.includes(':')) {
-                confirmWebAppLinkBtn.disabled = false;
-            } else {
-                confirmWebAppLinkBtn.disabled = true;
-            }
+            fetchQuestionData(quizId)
+                .then(result => {
+                    // Store the potential URL globally
+                    submissionUrl = result.submissionUrl;
+
+                    // Check if a *valid* URL was found
+                    if (submissionUrl && isValidWebAppUrl(submissionUrl)) {
+                        console.log("Valid submission URL found:", submissionUrl); // Log for debugging
+                        // Ask for consent
+                        const consent = confirm("This quiz is set to send your name and result to the quiz creator. Do you want to proceed?");
+                        if (consent) {
+                            userConsentedToSubmit = true;
+                            console.log("User consented to submission.");
+                            initializeAndStartQuiz(result.questions); // Start quiz if consent given
+                        } else {
+                            // User declined consent
+                            console.log("User declined submission.");
+                            alert("Submission declined. Returning to home.");
+                            goToHome(); // Go back home
+                        }
+                    } else {
+                        // No valid URL found, or URL was invalid
+                        if (submissionUrl) { // Log if a URL was found but invalid
+                            console.warn("Submission URL found in J2 but it is invalid:", submissionUrl);
+                        } else {
+                            console.log("No submission URL found in J2 or sheet is empty/malformed.");
+                        }
+                        userConsentedToSubmit = false; // Ensure flag is false
+                        submissionUrl = null;        // Ensure URL is null
+                        initializeAndStartQuiz(result.questions); // Start quiz without submission
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching questions during quiz start:', error);
+                    alert(`Error loading quiz data for ID "${quizId}". Please ensure the ID is correct and the sheet is accessible/formatted correctly. Details: ${error.message}`);
+                    goToHome(); // Go back home on error
+                });
         }
+ 
 
-        // Function to skip Result submission input
-        function skipWebAppLink() {
-            submissionId = null; // Set the ID to null
-            loadQuizQuestions();
-        }
 
+  
 
         // >>> ADD THIS HELPER FUNCTION (or ensure it's defined before use) <<<
         /**
@@ -1471,12 +1449,6 @@
         }
         
         
-        // Function to confirm Submission ID
-        function confirmWebAppLink() {
-            submissionId = webAppLinkInput.value.trim(); // Store the ID
-            loadQuizQuestions();
-        }
-
         // Function to load quiz questions
         function loadQuizQuestions() {
             showScreen(loadingScreen);
@@ -1539,313 +1511,424 @@
                 });
         }
 
+        /**
+         * Basic validation for a Google Apps Script Web App URL.
+         * @param {string|null} url The URL string to validate.
+         * @returns {boolean} True if the URL seems valid, false otherwise.
+         */
+        function isValidWebAppUrl(url) {
+            if (!url || typeof url !== 'string') {
+                return false;
+            }
+            // Simple check: starts with the base and ends with /exec
+            const validStart = 'https://script.google.com/macros/s/';
+            const validEnd = '/exec';
+            return url.startsWith(validStart) && url.endsWith(validEnd) && url.length > (validStart.length + validEnd.length);
+        }
+
+        function initializeAndStartQuiz(fetchedQuestions) {
+            // Use the globally stored 'questions' variable
+            questions = fetchedQuestions;
+
+            if (!questions || questions.length === 0) {
+                alert('No questions found or loaded. Please check the Quiz ID.');
+                goToHome(); // Go back if no questions
+                return;
+            }
+
+            totalQuestions.textContent = questions.length;
+            totalQuestionsResult.textContent = questions.length;
+
+            // Reset quizTimeLimit before checking the first question
+            quizTimeLimit = null;
+            if (questions[0]?.timeLimit && !isNaN(questions[0].timeLimit)) {
+                const parsedLimit = parseInt(questions[0].timeLimit, 10);
+                if (parsedLimit > 0) { // Only set if it's a positive number
+                    quizTimeLimit = parsedLimit;
+                    console.log(`Quiz time limit set to: ${quizTimeLimit} minutes`);
+                } else {
+                    console.log("Time limit found but is not positive, ignoring.");
+                }
+            } else {
+                console.log("No valid time limit found in the first question.");
+            }
+
+            // Preprocess MCQ questions
+            questions.forEach(question => {
+                if (question.type === 'MCQ') {
+                    let options = (question.mcqOptions || '')
+                        .split('#')
+                        .map(option => option.trim())
+                        .filter(option => option !== '');
+                    const correctAnswer = (question.answer || '').trim();
+
+                    // Make sure there are options before shuffling
+                    if (options.length > 0) {
+                        const shuffledOptions = shuffleArray(options);
+                        const letters = Array.from({ length: shuffledOptions.length }, (_, i) => String.fromCharCode(65 + i));
+                        question.shuffledOptions = shuffledOptions.map((option, index) => ({
+                            letter: letters[index],
+                            option: option,
+                            isCorrect: option.toLowerCase().trim() === correctAnswer.toLowerCase().trim()
+                        }));
+                    } else {
+                        // Handle case where MCQ has no options defined
+                        question.shuffledOptions = [];
+                        console.warn(`MCQ question number ${question.no || (questions.indexOf(question) + 1)} has no options defined.`);
+                    }
+                }
+            });
+
+            // Initialize user answers array
+            userAnswers = Array(questions.length).fill().map((_, index) => ({
+                questionNo: questions[index]?.no || index + 1, // Include question number if available
+                questionText: questions[index]?.question || '', // Include question text
+                userAnswer: '',
+                isAnswered: false,
+                isCorrect: false,
+                // Add other relevant fields if needed later, like correctAnswer
+                correctAnswer: questions[index]?.answer || '',
+                questionType: questions[index]?.type || 'Unknown', // Store type
+                explanation: questions[index]?.explanation || '' // Store explanation
+            }));
+
+            // Start timer
+            startTime = new Date();
+            startTimer();
+
+            // Show first question and the question screen
+            currentQuestion = 0; // Ensure we start at the first question
+            showQuestion(0);
+            showScreen(questionScreen);
+        }
+
         async function fetchQuestionData(sheetId) {
             const url = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=xlsx`;
+
+            // Define the expected column order *inside* the function or ensure it's accessible globally
+            const expectedOrder = [
+                'no', 'question', 'answer', 'type', 'mcqOptions',
+                'readingMaterial', 'hint', 'explanation', 'timeLimit',
+                'submissionUrl' // Added the new column name
+            ];
 
             try {
                 const response = await fetch(url);
                 if (!response.ok) {
-                    throw new Error('Failed to fetch spreadsheet');
+                    throw new Error(`Failed to fetch spreadsheet (Status: ${response.status})`);
                 }
 
                 const arrayBuffer = await response.arrayBuffer();
                 const data = new Uint8Array(arrayBuffer);
                 const workbook = XLSX.read(data, { type: 'array' });
 
-                // Get the first sheet and convert to an array of arrays
                 const firstSheetName = workbook.SheetNames[0];
                 const worksheet = workbook.Sheets[firstSheetName];
-                const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+                const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: true });
 
-                // If there are fewer than 2 rows, there is no data (since row 1 is header)
+                // Need at least a header row and one data row
                 if (!rows || rows.length < 2) {
-                    return [];
+                    console.warn("Sheet is empty or only has a header row.");
+                    return { questions: [], submissionUrl: null };
                 }
 
-                // Define the expected column order, including the new "timeLimit" column
-                const expectedOrder = [
-                    'no',              // Question number
-                    'question',        // Question text
-                    'answer',          // Answer
-                    'type',            // Question type
-                    'mcqOptions',      // Multiple choice options
-                    'readingMaterial', // Reading material
-                    'hint',            // Hint
-                    'explanation',     // Explanation
-                    'timeLimit'        // Quiz time limit in minutes (new column)
-                ];
+                // --- Extract Submission URL from the designated column in the first data row ---
+                const submissionUrlColumnIndex = expectedOrder.indexOf('submissionUrl');
+                let potentialUrl = null;
+
+                if (submissionUrlColumnIndex !== -1) {
+                    // Read from the first data row (index 1) and the found column index
+                    potentialUrl = rows[1]?.[submissionUrlColumnIndex]?.toString().trim() || null;
+                    if (potentialUrl) {
+                        console.log(`Potential Submission URL found in column '${expectedOrder[submissionUrlColumnIndex]}': ${potentialUrl}`);
+                    }
+                } else {
+                    console.warn("Column 'submissionUrl' not found in expectedOrder or sheet header.");
+                }
+                // --- End URL Extraction ---
+
+                // --- Prepare list of columns relevant for *each* question object ---
+                // Exclude 'submissionUrl' as it's quiz-level, not question-level
+                const questionSpecificColumns = expectedOrder.filter(colName => colName !== 'submissionUrl');
+
 
                 const questions = [];
-                // Loop through rows starting from index 1 (row 2 in the sheet)
+                // Start from row index 1 (second row in the sheet) for questions
                 for (let i = 1; i < rows.length; i++) {
                     const row = rows[i];
-                    // Stop processing if the row is completely empty
-                    if (row.every(cell => cell === undefined || cell === "")) {
-                        break;
+                    // Stop if we hit a row where the 'question' column (or 'no') is empty, treating it as the end of data
+                    const questionColIndex = expectedOrder.indexOf('question');
+                    const noColIndex = expectedOrder.indexOf('no');
+                    if (
+                        row.every(cell => cell === undefined || cell === null || cell === "") ||
+                        (questionColIndex !== -1 && (!row[questionColIndex] || String(row[questionColIndex]).trim() === '')) ||
+                        (noColIndex !== -1 && (!row[noColIndex] || String(row[noColIndex]).trim() === ''))
+                    ) {
+                        console.log(`Stopping question processing at sheet row ${i + 1} due to empty 'no'/'question' or fully empty row.`);
+                        break; // Stop processing further rows
                     }
+
                     const rowData = {};
-                    expectedOrder.forEach((key, index) => {
-                        rowData[key] = row[index] || "";
+                    // Iterate through the columns needed for individual questions
+                    questionSpecificColumns.forEach(key => {
+                        const originalIndex = expectedOrder.indexOf(key); // Find index in the full order
+                        if (originalIndex !== -1) { // Safety check
+                            rowData[key] = row[originalIndex] !== null && row[originalIndex] !== undefined
+                                ? String(row[originalIndex])
+                                : ""; // Ensure value is string or empty string
+                        }
                     });
+
+                    // Basic validation: Ensure at least a question text exists
+                    if (!rowData.question || rowData.question.trim() === '') {
+                        console.warn(`Skipping sheet row ${i + 1} due to missing question text in the processed data.`);
+                        continue; // Skip this row if no question text after processing
+                    }
+
                     questions.push(rowData);
                 }
 
-                return questions;
+                // Return the array of question objects and the separately extracted URL
+                return { questions: questions, submissionUrl: potentialUrl };
+
             } catch (error) {
                 console.error('Error fetching or parsing the spreadsheet:', error);
-                throw error;
+                // Optionally, return a default state or re-throw
+                // return { questions: [], submissionUrl: null }; // Example fallback
+                throw error; // Re-throw error to be caught by the caller (initiateQuizStart)
             }
         }
 
-
-        // NOTE: This function performs asynchronous operations (network, timeouts)
-        // and returns a Promise. It should be called with await or .then().catch().
-        async function submitQuizData(quizData) {
-            // Check if a submission ID was provided
-            if (!submissionId) {
-                 console.log("No submission ID provided. Skipping submission.");
-                 // Resolve with a specific status indicating skipped
-                 return Promise.resolve('skipped');
-            }
-
-            // *** Check browser's online status first ***
+        /**
+         * Attempts to submit quiz data to the specified Google Apps Script Web App URL.
+         * Uses a hidden form and iframe to avoid page navigation.
+         * Includes offline check and timeout.
+         *
+         * @param {object} quizData The data object to submit (e.g., name, score, time).
+         * @param {string} fullUrl The complete Google Apps Script Web App URL to POST to.
+         * @returns {Promise<string>} A promise that resolves with 'attempt_finished' if the iframe loads
+         *                            (indicating the browser sent the request, regardless of server response),
+         *                            or rejects with an Error on offline, timeout, or setup failure.
+         */
+        async function submitQuizData(quizData, fullUrl) {
             if (!navigator.onLine) {
                 console.error("Submission aborted: Browser is offline.");
-                // Reject immediately if the browser reports being offline
                 return Promise.reject(new Error('Browser is offline. Submission failed.'));
             }
-            // *** END ONLINE CHECK ***
 
-            const fullWebAppUrl = WEB_APP_BASE_URL + submissionId + WEB_APP_URL_SUFFIX;
-            console.log("Submitting to URL:", fullWebAppUrl); // Optional: for debugging
+            console.log("Submitting quiz data to URL:", fullUrl);
 
-            // Return a new Promise to handle the asynchronous form submission
             return new Promise((resolve, reject) => {
                 let form = null;
                 let iframe = null;
                 let timeoutId = null;
-                let resolved = false; // Flag to prevent double resolution/rejection
+                let resolved = false;
 
-                // Cleanup function (Updated for robustness)
                 const cleanup = () => {
-                    clearTimeout(timeoutId); // Clear the timeout regardless
+                    clearTimeout(timeoutId);
 
-                    // --- More Robust Removal ---
-                    // Check if iframe exists and is still attached to the DOM before removing
                     if (iframe && iframe.parentNode) {
                         try {
-                             iframe.parentNode.removeChild(iframe);
-                             // console.log("Cleanup: Removed iframe."); // Optional log
+                            iframe.parentNode.removeChild(iframe);
                         } catch (e) {
-                             // Log if removal failed (e.g., already removed by concurrent call)
-                             console.warn("Could not remove iframe during cleanup (already removed?):", e.message);
+                            console.warn("Could not remove iframe during cleanup:", e.message);
                         }
-                    } else if (iframe) {
-                        // Optional log: If iframe exists but has no parent
-                        // console.log("Cleanup: Iframe found but already detached.");
                     }
 
-                    // Check if form exists and is still attached to the DOM before removing
                     if (form && form.parentNode) {
-                         try {
-                             form.parentNode.removeChild(form);
-                             // console.log("Cleanup: Removed form."); // Optional log
-                         } catch (e) {
-                             // Log if removal failed
-                             console.warn("Could not remove form during cleanup (already removed?):", e.message);
-                         }
-                    } else if (form) {
-                        // Optional log: If form exists but has no parent
-                        // console.log("Cleanup: Form found but already detached.");
+                        try {
+                            form.parentNode.removeChild(form);
+                        } catch (e) {
+                            console.warn("Could not remove form during cleanup:", e.message);
+                        }
                     }
-                    // Nullify references after attempting removal
+
                     iframe = null;
                     form = null;
-                     // --- End Robust Removal ---
                 };
 
-
                 try {
-                    // Create an invisible form
                     form = document.createElement('form');
                     form.style.display = 'none';
                     form.method = 'POST';
-                    form.action = fullWebAppUrl;
-                    form.target = 'quizSubmitTarget'; // Use a fixed name or generate unique
+                    form.action = fullUrl;
+                    form.target = 'quizSubmitTarget';
 
-                    // Add data as hidden inputs
                     for (const key in quizData) {
-                        const input = document.createElement('input');
-                        input.type = 'hidden';
-                        input.name = key;
-                        input.value = typeof quizData[key] === 'object'
-                            ? JSON.stringify(quizData[key])
-                            : quizData[key].toString();
-                        form.appendChild(input);
+                        if (Object.prototype.hasOwnProperty.call(quizData, key) && quizData[key] !== undefined && quizData[key] !== null) {
+                            const input = document.createElement('input');
+                            input.type = 'hidden';
+                            input.name = key;
+                            input.value = typeof quizData[key] === 'object'
+                                ? JSON.stringify(quizData[key])
+                                : String(quizData[key]);
+                            form.appendChild(input);
+                        }
                     }
 
-                    // Create a hidden iframe to target the form submission
                     iframe = document.createElement('iframe');
                     iframe.name = 'quizSubmitTarget';
                     iframe.style.display = 'none';
 
-                    // Handle response (iframe loaded something)
                     iframe.onload = () => {
-                        if (resolved) return; // Prevent firing after timeout/error
+                        if (resolved) return;
                         resolved = true;
-                        // NOTE: This load event can fire for success OR error pages (like 401, or offline page)
                         console.log("Submission iframe loaded (could be success or browser/server error page).");
-                        cleanup(); // Call cleanup
-                        // Resolve indicating the attempt finished via load event.
+                        cleanup();
                         resolve('attempt_finished');
                     };
 
-                    // Handle potential network errors on iframe itself (less common for POST)
                     iframe.onerror = (err) => {
                         if (resolved) return;
                         resolved = true;
                         console.error("Iframe loading error during submission:", err);
-                        cleanup(); // Call cleanup
-                        // Reject as this indicates a failure to even load the iframe target
+                        cleanup();
                         reject(new Error('Iframe loading failed'));
                     };
 
-                    // Set a timeout
                     timeoutId = setTimeout(() => {
-                        if (resolved) return; // Prevent firing after onload/error
+                        if (resolved) return;
                         resolved = true;
-                        console.log("Form submission timed out.");
-                        cleanup(); // Call cleanup
-                        // Treat timeout as failure for UI
+                        console.warn("Form submission timed out.");
+                        cleanup();
                         reject(new Error('Submission timed out'));
-                    }, 8000); // 8 seconds timeout
+                    }, 10000);
 
-                    // Add elements to the DOM and submit
-                    document.body.appendChild(iframe); // Add iframe first
+                    document.body.appendChild(iframe);
                     document.body.appendChild(form);
                     form.submit();
-
+                    console.log("Form submitted via hidden iframe.");
                 } catch (formError) {
-                    // Catch errors during form/iframe setup
                     console.error("Error setting up form submission:", formError);
-                    if (!resolved) { // Ensure cleanup happens if error occurred mid-setup
-                         // Avoid calling cleanup explicitly here IF form/iframe weren't potentially added yet
-                         // Let the variable checks handle null states. If they were added, subsequent events might call cleanup.
-                         resolved = true; // Mark as resolved to prevent event handlers from running cleanup again
-                         clearTimeout(timeoutId); // Still clear timeout
+                    if (!resolved) {
+                        resolved = true;
+                        clearTimeout(timeoutId);
+                        if (iframe && iframe.parentNode) { try { iframe.parentNode.removeChild(iframe); } catch(e){} }
+                        if (form && form.parentNode) { try { form.parentNode.removeChild(form); } catch(e){} }
                     }
-                    // Reject if the setup itself failed
                     reject(formError);
                 }
             });
         }
 
-
+        /**
+         * Finalizes the quiz: stops the timer, calculates results, attempts submission
+         * if URL exists and user consented, updates the results screen, and displays it.
+         */
         async function finishQuiz() {
-                stopTimer();
-                quizCompleted = true;
+            stopTimer();
+            quizCompleted = true;
 
-                // Get the notification element and reset its state
-                const submissionNotification = document.getElementById('submissionNotification');
+            const submissionNotification = document.getElementById('submissionNotification');
+            submissionNotification.style.display = 'none';
+            submissionNotification.textContent = '';
+            submissionNotification.classList.remove('error');
+
+            const totalAttempted = userAnswers.filter(answer => answer && answer.isAnswered).length;
+            const correct = userAnswers.filter(answer => answer && answer.isAnswered && answer.isCorrect).length;
+            const incorrect = totalAttempted - correct;
+
+            totalQuestionsAttempted.textContent = totalAttempted;
+            correctAnswers.textContent = correct;
+            correctAnswersCount.textContent = correct;
+            incorrectAnswersCount.textContent = incorrect;
+            totalQuestionsResult.textContent = questions.length;
+
+            const endTime = new Date();
+            const elapsedMilliseconds = endTime - startTime;
+            const elapsedSeconds = Math.max(0, Math.floor(elapsedMilliseconds / 1000));
+            const minutes = Math.floor(elapsedSeconds / 60);
+            const seconds = elapsedSeconds % 60;
+            const formattedTimeSpent = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+            timeSpent.textContent = formattedTimeSpent;
+
+            if (submissionUrl && userConsentedToSubmit) {
+                console.log("Attempting result submission (URL found and consent given).");
+
+                const quizData = {
+                    name: studentName.textContent || "Anonymous",
+                    quizId: sheetIdInput.value || "Unknown Quiz ID",
+                    stats: buildStatsString(),
+                    totalQuestions: questions.length,
+                    questionsAttempted: totalAttempted,
+                    correctAnswers: correct,
+                    incorrectAnswers: incorrect,
+                    timeSpent: formattedTimeSpent
+                };
+
+                try {
+                    const status = await submitQuizData(quizData, submissionUrl);
+                    console.log(`Submission attempt finished with browser status: ${status}`);
+                } catch (error) {
+                    console.error("Submission failed:", error);
+                    submissionNotification.textContent = "Submission Error: Please take a screenshot of your results and inform your teacher.";
+                    submissionNotification.classList.add('error');
+                    submissionNotification.style.display = 'block';
+                }
+            } else {
+                if (!submissionUrl) {
+                    console.log("Submission skipped: No valid submission URL was configured for this quiz.");
+                } else if (!userConsentedToSubmit) {
+                    console.log("Submission skipped: User did not consent at the start.");
+                }
+            }
+
+            showScreen(resultScreen);
+        }
+
+        /**
+         * Resets the application state to its initial condition, clears inputs,
+         * stops timers, and displays the welcome screen.
+         */
+        function goToHome() {
+            console.log("Returning to home screen, resetting state.");
+
+            questions = [];
+            currentQuestion = 0;
+            userAnswers = [];
+            quizCompleted = false;
+            startTime = null;
+            quizTimeLimit = null;
+
+            submissionUrl = null;
+            userConsentedToSubmit = false;
+
+            if (timerInterval) {
+                stopTimer();
+                timerInterval = null;
+            }
+
+            nameInput.value = '';
+            sheetIdInput.value = '';
+
+            if (builtInQuizSelect.options.length > 0) {
+                builtInQuizSelect.selectedIndex = 0;
+            }
+
+            builtInQuizSelect.disabled = builtInQuizzes.length === 0;
+            startBuiltInQuizBtn.disabled = true;
+
+            const submissionNotification = document.getElementById('submissionNotification');
+            if (submissionNotification) {
                 submissionNotification.style.display = 'none';
                 submissionNotification.textContent = '';
-                submissionNotification.classList.remove('error'); // Remove error class if present
+                submissionNotification.classList.remove('error');
+            }
 
-                // --- Calculate results (This part remains unchanged) ---
-                const totalAttempted = userAnswers.filter(answer => answer && answer.isAnswered).length;
-                const correct = userAnswers.filter(answer => answer && answer.isCorrect && answer.isAnswered).length;
-                const incorrect = totalAttempted - correct;
-                totalQuestionsAttempted.textContent = totalAttempted;
-                correctAnswers.textContent = correct;
-                correctAnswersCount.textContent = correct;
-                incorrectAnswersCount.textContent = incorrect;
-                const endTime = new Date();
-                const elapsedMilliseconds = endTime - startTime;
-                const elapsedSeconds = Math.floor(elapsedMilliseconds / 1000);
-                const minutes = Math.floor(elapsedSeconds / 60);
-                const seconds = elapsedSeconds % 60;
-                const formattedTimeSpent = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-                timeSpent.textContent = formattedTimeSpent;
-                // --- End of results calculation ---
+            studentName.textContent = '';
+            correctAnswers.textContent = '0';
+            totalQuestionsResult.textContent = '0';
+            totalQuestionsAttempted.textContent = '0';
+            correctAnswersCount.textContent = '0';
+            incorrectAnswersCount.textContent = '0';
+            timeSpent.textContent = '00:00';
 
-
-                // --- Submission Logic ---
-                if (submissionId) {
-                        const quizData = {
-                                name: studentName.textContent,
-                                quizId: sheetIdInput.value,
-                                stats: buildStatsString(),
-                                totalQuestions: questions.length,
-                                questionsAttempted: totalAttempted,
-                                correctAnswers: correct,
-                                incorrectAnswers: incorrect,
-                                timeSpent: formattedTimeSpent
-                        };
-
-                        // Wrap the submission attempt in try...catch
-                        try {
-                                // Attempt submission
-                                const status = await submitQuizData(quizData); // status might be 'attempt_finished' or 'skipped'
-
-                                // In this simple approach, DO NOTHING on success/resolve.
-                                // Only show message on explicit failure caught below.
-                                console.log(`Submission attempt finished with status: ${status}`);
-
-                        } catch (error) {
-                                // --- THIS IS WHERE WE SHOW THE ERROR ---
-                                console.error("Submission failed:", error); // Log the actual error for debugging
-
-                                // Display the generic error message to the user
-                                submissionNotification.textContent = "Submission Error: Please take a screenshot of your results and inform your teacher.";
-                                submissionNotification.classList.add('error'); // Add error styling
-                                submissionNotification.style.display = 'block'; // Show the notification
-                        }
-
-                } else {
-                        console.log("No submission ID entered, skipping submission.");
-                        // No notification needed if submission was intentionally skipped.
-                }
-
-                // Show result screen (always happens)
-                showScreen(resultScreen);
+            showScreen(welcomeScreen);
         }
 
-        function goToHome() {
-                // Reset app state
-                questions = [];
-                currentQuestion = 0;
-                userAnswers = [];
-                quizCompleted = false;
 
-                if (builtInQuizSelect.options.length > 0) { // Check if options exist before setting index
-                        builtInQuizSelect.selectedIndex = 0; // Reset dropdown to the default option
-                }
-                builtInQuizSelect.disabled = builtInQuizzes.length === 0; // Re-disable if no quizzes were loaded initially
-                startBuiltInQuizBtn.disabled = true;  // Disable the start button
 
-                nameInput.value = '';
-                sheetIdInput.value = ''; // Reset custom quiz ID field as well
-                quizTimeLimit = null;
-                submissionId = null;
-                webAppLinkInput.value = '';
-                confirmWebAppLinkBtn.disabled = true;
 
-                // Ensure the notification is hidden and reset
-                const submissionNotification = document.getElementById('submissionNotification');
-                if (submissionNotification) { // Check if element exists before manipulating
-                        submissionNotification.style.display = 'none';
-                        submissionNotification.textContent = '';
-                        submissionNotification.classList.remove('error');
-                }
-
-                // Stop timer if running
-                if (timerInterval) {
-                        stopTimer();
-                }
-
-                // Show welcome screen
-                showScreen(welcomeScreen);
-        }
 
         
         // Utility function to shuffle an array (Fisher-Yates shuffle)
